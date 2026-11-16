@@ -1,0 +1,63 @@
+name: Build unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Archive (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -project YTWatch.xcodeproj \
+            -scheme YTWatch \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/YTWatch.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            | tee "$RUNNER_TEMP/xcodebuild.log" | grep -E 'error:|warning: .*fatal|\*\* ARCHIVE' || true
+          test -d "$RUNNER_TEMP/YTWatch.xcarchive/Products/Applications/YTWatch.app" || { tail -200 "$RUNNER_TEMP/xcodebuild.log"; exit 1; }
+
+      - name: Package IPA
+        run: |
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$RUNNER_TEMP/YTWatch.xcarchive/Products/Applications/YTWatch.app" "$RUNNER_TEMP/ipa/Payload/"
+          echo "Bundle contents:"; ls -R "$RUNNER_TEMP/ipa/Payload/YTWatch.app" | head -50
+          # WatchBridge needs the companion Watch app embedded at YTWatch.app/Watch/*.app
+          WATCH_APP=$(ls -d "$RUNNER_TEMP/ipa/Payload/YTWatch.app/Watch/"*.app 2>/dev/null | head -1)
+          if [ -z "$WATCH_APP" ]; then echo "::error::Watch app not embedded in YTWatch.app/Watch/"; exit 1; fi
+          echo "Embedded watch app: $WATCH_APP"
+          file "$WATCH_APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$WATCH_APP/Info.plist")"
+          cd "$RUNNER_TEMP/ipa"
+          zip -qry "$GITHUB_WORKSPACE/YTWatch-unsigned.ipa" Payload
+          ls -lh "$GITHUB_WORKSPACE/YTWatch-unsigned.ipa"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YTWatch-unsigned-ipa
+          path: YTWatch-unsigned.ipa
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: xcodebuild-log
+          path: ${{ runner.temp }}/xcodebuild.log
