@@ -561,7 +561,7 @@ final class AudioDownloader: NSObject, ObservableObject {
 
         // Cancel any active background download task
         if let taskId = videoIdToTaskId[videoId] {
-            bgSession.getAllTasks { tasks in
+            bgSession.getAllTasks { @Sendable tasks in
                 for task in tasks where task.taskIdentifier == taskId {
                     task.cancel()
                 }

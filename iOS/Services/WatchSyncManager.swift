@@ -230,7 +230,7 @@ final class WatchSyncManager: NSObject, ObservableObject {
             WatchMessageKey.type.rawValue: WatchMessageType.syncVerify.rawValue
         ]
 
-        session.sendMessage(msg, replyHandler: { _ in
+        session.sendMessage(msg, replyHandler: { @Sendable _ in
             // The watch will send a file back with the inventory.
             // Setup a safety timeout to clear the spinner if the file never arrives.
             Task { @MainActor [weak self] in
@@ -239,7 +239,7 @@ final class WatchSyncManager: NSObject, ObservableObject {
                 self.isVerifying = false
                 print("[Sync] Verify timed out waiting for inventory file")
             }
-        }, errorHandler: { [weak self] error in
+        }, errorHandler: { @Sendable [weak self] error in
             Task { @MainActor in
                 guard let self else { return }
                 self.isVerifying = false
@@ -461,7 +461,7 @@ final class WatchSyncManager: NSObject, ObservableObject {
                                 WatchMessageKey.payload.rawValue: data.base64EncodedString()
                             ]
                             let videoId = item.track.videoId
-                            session.sendMessage(msg, replyHandler: nil) { [weak self] error in
+                            session.sendMessage(msg, replyHandler: nil) { @Sendable [weak self] error in
                                 // sendMessage failed → mark WiFi-failed, remove from transferring, re-drain picks up via Bluetooth
                                 print("[Sync] sendMessage failed for \(videoId): \(error.localizedDescription)")
                                 Task { @MainActor in
@@ -759,7 +759,12 @@ final class WatchSyncManager: NSObject, ObservableObject {
     }
 
     func requestNotificationPermission() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        // The completion handler runs on a background queue. A closure written inside this
+        // @MainActor class is inferred MainActor-isolated, and Swift 6 traps when it runs
+        // off the main thread, so use the async API instead of a callback.
+        Task.detached {
+            _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+        }
     }
 
     private func saveSyncState() {
