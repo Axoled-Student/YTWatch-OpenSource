@@ -94,6 +94,18 @@ final class WatchPlayer: ObservableObject {
     /// volume (Digital Crown / volume HUD) is what the wearer adjusts, and anything lower
     /// here just caps it — 0.5 made the Watch speaker too quiet even at 100%.
     @Published var currentVolume: Float = 1.0
+    /// Software gain past 100% (see AudioBoost). Persisted.
+    @Published private(set) var volumeBoost: VolumeBoost =
+        VolumeBoost(rawValue: UserDefaults.standard.double(forKey: "volumeBoost")) ?? .off
+
+    func setVolumeBoost(_ boost: VolumeBoost) {
+        guard boost != volumeBoost else { return }
+        volumeBoost = boost
+        UserDefaults.standard.set(boost.rawValue, forKey: "volumeBoost")
+        haptic(.click)
+        // Applies to the playing track immediately; new tracks pick it up in beginPlayback.
+        if let item = playerItem { AudioBoost.apply(to: item, boost: boost) }
+    }
     /// When a playlist ends, keep playing an endless shuffle of the whole library
     /// instead of stopping.
     @Published var autoPlaySimilar: Bool = (UserDefaults.standard.object(forKey: "autoPlaySimilar") as? Bool) ?? true {
@@ -813,6 +825,7 @@ final class WatchPlayer: ObservableObject {
             }
         }
         playerItem = item
+        AudioBoost.apply(to: item, boost: volumeBoost)
 
         let capturedGen = generation
 
