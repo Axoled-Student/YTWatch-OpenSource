@@ -87,10 +87,6 @@ private struct NowPlayingMainPage: View {
                 HStack(spacing: 6) {
                     OutputChip()
                     Spacer(minLength: 0)
-                    // Tap, then turn the Digital Crown.
-                    SystemVolumeControl()
-                        .frame(width: 30, height: 30)
-                        .accessibilityLabel("Volume")
                     Button {
                         withAnimation(.easeOut(duration: 0.2)) { darkScreen = true }
                     } label: {
@@ -104,7 +100,14 @@ private struct NowPlayingMainPage: View {
                     .accessibilityLabel("Dark screen")
                 }
 
-                if let error = player.error {
+                if player.boostPreparing {
+                    HStack(spacing: 5) {
+                        ProgressView().scaleEffect(0.5).frame(width: 12, height: 12)
+                        Text("Boosting this song…")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(Color(white: 0.6))
+                    }
+                } else if let error = player.error {
                     Text(error)
                         .font(.system(size: 10))
                         .foregroundStyle(.orange)
@@ -151,7 +154,7 @@ private struct OutputChip: View {
             HStack(spacing: 4) {
                 Image(systemName: player.outputMode.sfSymbol)
                     .font(.system(size: 10, weight: .semibold))
-                Text(player.outputMode == .speaker ? "Speaker" : "Headphones")
+                Text(chipText)
                     .font(.system(size: 10, weight: .semibold))
                     .lineLimit(1)
             }
@@ -165,6 +168,11 @@ private struct OutputChip: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Audio output: \(player.outputMode.label). Tap to switch.")
+    }
+
+    private var chipText: String {
+        guard player.outputMode == .speaker else { return "Headphones" }
+        return player.volumeBoost == .off ? "Speaker" : "Speaker \(player.volumeBoost.shortLabel)"
     }
 }
 
@@ -192,23 +200,23 @@ private struct NowPlayingOptionsPage: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                OptionLabel("Volume")
-                HStack(spacing: 10) {
-                    SystemVolumeControl()
-                        .frame(width: 38, height: 38)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(player.outputMode == .speaker ? "Watch speaker" : "Headphones")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.white)
-                        Text("Tap, then turn the Digital Crown")
-                            .font(.system(size: 10))
-                            .foregroundStyle(Color(white: 0.5))
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 0)
+                NavigationLink(destination: VolumeScreen()) {
+                    OptionRow(symbol: "speaker.wave.3.fill", title: "Volume")
                 }
-                .padding(8)
-                .background(Color(white: 0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .buttonStyle(.plain)
+
+                OptionLabel("Speaker Boost")
+                HStack(spacing: 4) {
+                    ForEach(VolumeBoost.allCases) { boost in
+                        BoostOption(boost: boost)
+                    }
+                }
+                .disabled(player.outputMode != .speaker)
+                .opacity(player.outputMode == .speaker ? 1 : 0.4)
+                Text(boostNote)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color(white: 0.5))
+                    .fixedSize(horizontal: false, vertical: true)
 
                 OptionLabel("Playback")
                 HStack(spacing: 6) {
@@ -235,6 +243,12 @@ private struct NowPlayingOptionsPage: View {
             .padding(.leading, 6)
             .padding(.trailing, 12) // clear of the page indicator
         }
+    }
+
+    private var boostNote: String {
+        if player.outputMode != .speaker { return "Boost works on the Watch speaker only." }
+        if player.volumeBoost == .off { return "Louder than 100%. Higher boosts sound more squeezed." }
+        return "Each song is prepared a few seconds before it plays; peaks are limited, not clipped."
     }
 
     private var speakerStatus: String {
@@ -287,6 +301,49 @@ private struct OutputOption: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+private struct BoostOption: View {
+    @ObservedObject private var player = WatchPlayer.shared
+    let boost: VolumeBoost
+
+    var body: some View {
+        let selected = player.volumeBoost == boost
+        Button { player.setVolumeBoost(boost) } label: {
+            Text(boost.shortLabel)
+                .font(.system(size: 11, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .foregroundStyle(selected ? .white : Color(white: 0.55))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(selected ? Color.ytRed : Color(white: 0.12),
+                            in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Speaker boost \(boost.label)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// Volume on its own screen: the volume control takes over the Digital Crown, and here
+/// the back button always gets you out.
+private struct VolumeScreen: View {
+    @ObservedObject private var player = WatchPlayer.shared
+
+    var body: some View {
+        VStack(spacing: 10) {
+            SystemVolumeControl()
+                .frame(width: 80, height: 80)
+            Text(player.outputMode == .speaker ? "Watch speaker" : "Headphones")
+                .font(.system(size: 13, weight: .semibold))
+            Text("Turn the Digital Crown")
+                .font(.system(size: 11))
+                .foregroundStyle(Color(white: 0.5))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationTitle("Volume")
     }
 }
 

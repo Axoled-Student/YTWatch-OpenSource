@@ -94,6 +94,11 @@ final class WatchPlayer: ObservableObject {
     /// volume (Digital Crown / volume HUD) is what the wearer adjusts, and anything lower
     /// here just caps it — 0.5 made the Watch speaker too quiet even at 100%.
     @Published var currentVolume: Float = 1.0
+    /// Extra loudness for the Watch speaker (see BoostRenderer). Persisted.
+    @Published private(set) var volumeBoost: VolumeBoost =
+        VolumeBoost(rawValue: UserDefaults.standard.integer(forKey: "volumeBoostDB")) ?? .off
+    /// True while the boosted copy of the song that should be playing is being made.
+    @Published private(set) var boostPreparing = false
     /// When a playlist ends, keep playing an endless shuffle of the whole library
     /// instead of stopping.
     @Published var autoPlaySimilar: Bool = (UserDefaults.standard.object(forKey: "autoPlaySimilar") as? Bool) ?? true {
@@ -192,8 +197,100 @@ final class WatchPlayer: ObservableObject {
         applySessionCategory()
         haptic(.click)
         if mode == .headphones { SpeakerRuntime.shared.stop() }
-        if wasPlaying { play() }
+        if volumeBoost != .off, currentTrack != nil {
+            // The loaded file is the boosted copy or the original; switch to the other.
+            isPlaying = wasPlaying
+            refreshBoostForCurrentTrack()
+        } else if wasPlaying {
+            play()
+        }
         WidgetPublisher.shared.schedule()
+    }
+
+    // MARK: - Volume boost
+
+    /// The boost in effect: only on the speaker.
+    private var activeBoost: VolumeBoost? {
+        outputMode == .speaker && volumeBoost != .off ? volumeBoost : nil
+    }
+
+    func setVolumeBoost(_ boost: VolumeBoost) {
+        guard boost != volumeBoost else { return }
+        volumeBoost = boost
+        UserDefaults.standard.set(boost.rawValue, forKey: "volumeBoostDB")
+        WatchDiagnostics.shared.log("volume boost -> \(boost.label)")
+        haptic(.click)
+        if boost == .off { BoostRenderer.shared.clearAll() }
+        guard outputMode == .speaker, currentTrack != nil else { return }
+        refreshBoostForCurrentTrack()
+    }
+
+    /// The file to play for `track`: its boosted copy if one is ready and wanted.
+    private func playbackURL(for track: Track) -> URL? {
+        guard let raw = WatchFileReceiver.shared.audioURL(for: track.videoId) else { return nil }
+        if let boost = activeBoost,
+           let boosted = BoostRenderer.shared.cachedURL(videoId: track.videoId, boost: boost) {
+            return boosted
+        }
+        return raw
+    }
+
+    /// Reload the current song at the same position from the right file (original, or
+    /// boosted copy — rendering it first if needed).
+    private func refreshBoostForCurrentTrack() {
+        guard let track = currentTrack,
+              let raw = WatchFileReceiver.shared.audioURL(for: track.videoId) else { return }
+        let gen = playbackGeneration
+        guard let boost = activeBoost else {
+            swapCurrentAudio(to: raw)
+            return
+        }
+        if let ready = BoostRenderer.shared.cachedURL(videoId: track.videoId, boost: boost) {
+            swapCurrentAudio(to: ready)
+            prepareUpcomingBoost()
+            return
+        }
+        boostPreparing = true
+        Task { @MainActor [weak self] in
+            let rendered = await BoostRenderer.shared.render(
+                videoId: track.videoId, source: raw, boost: boost, exclusive: true)
+            guard let self, self.playbackGeneration == gen,
+                  self.currentTrack?.videoId == track.videoId else { return }
+            self.boostPreparing = false
+            guard let rendered else { return } // keep playing the original
+            self.swapCurrentAudio(to: rendered)
+            self.prepareUpcomingBoost()
+        }
+    }
+
+    /// Replace the loaded file for the current song, keeping position and play state.
+    /// beginPlayback seeks to `currentTime`.
+    private func swapCurrentAudio(to url: URL) {
+        guard currentTrack != nil else { return }
+        WatchDiagnostics.shared.log("  switching audio file at \(WatchDiagnostics.seconds(currentTime))")
+        removeItemObservers()
+        stopStallTimer()
+        playerItem = nil
+        playbackGeneration += 1
+        stallDetector.reset()
+        endOfItemDetector.reset()
+        playbackWatchdog.userTookControl()
+        activateSessionAndPlay(url: url, generation: playbackGeneration)
+    }
+
+    /// Make the next song's boosted copy while this one plays; drop older copies.
+    private func prepareUpcomingBoost() {
+        guard let boost = activeBoost else { return }
+        var keep = Set<String>()
+        if let current = currentTrack { keep.insert(current.videoId) }
+        let next = upNextTracks.first
+        if let next { keep.insert(next.videoId) }
+        BoostRenderer.shared.prune(keeping: keep)
+        guard let next, BoostRenderer.shared.cachedURL(videoId: next.videoId, boost: boost) == nil,
+              let raw = WatchFileReceiver.shared.audioURL(for: next.videoId) else { return }
+        Task { @MainActor in
+            _ = await BoostRenderer.shared.render(videoId: next.videoId, source: raw, boost: boost)
+        }
     }
 
     private func updateSpeakerRuntime() {
@@ -425,7 +522,7 @@ final class WatchPlayer: ObservableObject {
             return
         }
         if !sessionActivated, let track = currentTrack,
-           let url = WatchFileReceiver.shared.audioURL(for: track.videoId) {
+           let url = playbackURL(for: track) {
             isPlaying = true
             activateSessionAndPlay(url: url, generation: playbackGeneration)
             return
@@ -433,7 +530,7 @@ final class WatchPlayer: ObservableObject {
         guard player?.currentItem != nil else {
             // No item loaded — (re)load the current track
             if let track = currentTrack,
-               let url = WatchFileReceiver.shared.audioURL(for: track.videoId) {
+               let url = playbackURL(for: track) {
                 knownTrackDuration = track.durationSeconds > 0 ? Double(track.durationSeconds) : 0
                 if duration <= 0 { duration = knownTrackDuration }
                 stallDetector.reset()
@@ -651,6 +748,7 @@ final class WatchPlayer: ObservableObject {
         // a user presses Next and advance a second time.
         playbackGeneration += 1
         let gen = playbackGeneration
+        boostPreparing = false
         let track = playlist.tracks[index]
         guard let url = WatchFileReceiver.shared.audioURL(for: track.videoId) else {
             // The queue only offers tracks the availability cache says are on disk, so
@@ -713,7 +811,29 @@ final class WatchPlayer: ObservableObject {
         // Update Now Playing immediately so it shows even before audio starts
         updateNowPlaying()
 
-        activateSessionAndPlay(url: url, generation: gen)
+        guard let boost = activeBoost else {
+            activateSessionAndPlay(url: url, generation: gen)
+            return
+        }
+        if let ready = BoostRenderer.shared.cachedURL(videoId: track.videoId, boost: boost) {
+            activateSessionAndPlay(url: ready, generation: gen)
+            prepareUpcomingBoost()
+            return
+        }
+        // Not ready (first boosted song, or a skip past the prepared one). Hold the old
+        // song instead of letting it run on under the new title while this one renders.
+        boostPreparing = true
+        player?.pause()
+        WatchDiagnostics.shared.log("  boosting \(boost.label) before playing")
+        Task { @MainActor [weak self] in
+            let rendered = await BoostRenderer.shared.render(
+                videoId: track.videoId, source: url, boost: boost, exclusive: true)
+            guard let self, self.playbackGeneration == gen else { return }
+            self.boostPreparing = false
+            if rendered == nil { WatchDiagnostics.shared.log("  boost unavailable — playing original") }
+            self.activateSessionAndPlay(url: rendered ?? url, generation: gen)
+            self.prepareUpcomingBoost()
+        }
     }
 
     /// Called when a track can't be played. Bounded so it never infinitely
