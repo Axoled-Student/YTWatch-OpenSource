@@ -190,19 +190,6 @@ private struct NowPlayingOptionsPage: View {
                 SystemVolumeControl()
                     .frame(height: 34)
 
-                OptionLabel("Boost")
-                HStack(spacing: 4) {
-                    ForEach(VolumeBoost.allCases) { boost in
-                        BoostOption(boost: boost)
-                    }
-                }
-                if player.volumeBoost != .off {
-                    Text("Louder than 100%. Very loud songs are softened at the peaks instead of crackling.")
-                        .font(.system(size: 10))
-                        .foregroundStyle(Color(white: 0.5))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
                 OptionLabel("Playback")
                 HStack(spacing: 6) {
                     ToggleTile(symbol: "shuffle", title: "Shuffle", isOn: player.isShuffled) {
@@ -279,29 +266,6 @@ private struct OutputOption: View {
                         in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .buttonStyle(.plain)
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-}
-
-private struct BoostOption: View {
-    @ObservedObject private var player = WatchPlayer.shared
-    let boost: VolumeBoost
-
-    var body: some View {
-        let selected = player.volumeBoost == boost
-        Button { player.setVolumeBoost(boost) } label: {
-            Text(boost.label)
-                .font(.system(size: 11, weight: .semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .foregroundStyle(selected ? .white : Color(white: 0.55))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-                .background(selected ? Color.ytRed : Color(white: 0.12),
-                            in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Volume boost \(boost.label)")
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
