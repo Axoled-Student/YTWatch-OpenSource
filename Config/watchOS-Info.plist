@@ -27,5 +27,11 @@
     <array>
         <string>audio</string>
     </array>
+    <!-- Extended runtime session type used by Speaker mode (see SpeakerRuntime.swift):
+         keeps the app running with the screen off while audio plays on the built-in speaker. -->
+    <key>WKBackgroundModes</key>
+    <array>
+        <string>physical-therapy</string>
+    </array>
 </dict>
 </plist>

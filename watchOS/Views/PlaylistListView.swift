@@ -106,7 +106,8 @@ struct PlaylistListView: View {
                             }
 
                             // Now playing bar
-                            if let track = player.currentTrack, player.isPlaying {
+                            if let track = player.currentTrack,
+                               player.isPlaying || player.currentTime <= 5 {
                                 NavigationLink(destination: NowPlayingScreen()) {
                                     NowPlayingBanner(track: track)
                                 }
@@ -289,6 +290,23 @@ struct PlaylistListView: View {
                             .tint(Color.ytRed)
                             .padding(.horizontal, 8)
                             .padding(.top, 6)
+
+                            // Output — headphones (Bluetooth) or the Watch's own speaker
+                            Toggle(isOn: Binding(
+                                get: { player.outputMode == .speaker },
+                                set: { player.setOutputMode($0 ? .speaker : .headphones) }
+                            )) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "speaker.wave.2.fill")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundStyle(Color.ytRed)
+                                    Text("Play on Watch Speaker")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundStyle(Color(white: 0.7))
+                                }
+                            }
+                            .tint(Color.ytRed)
+                            .padding(.horizontal, 8)
 
                             // Diagnostics, on the main screen rather than buried behind the
                             // storage bar: it's needed exactly when something has gone wrong,

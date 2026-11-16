@@ -49,6 +49,8 @@ struct YTWatchWatchApp: App {
                 WatchDiagnostics.shared.log("app active")
                 // Re-sync sleep timer from absolute target after background
                 WatchPlayer.shared.refreshSleepTimer()
+                // Renew the speaker keep-alive session if it expired while the screen was off.
+                WatchPlayer.shared.appBecameActive()
             case .background:
                 // Screen-off/wrist-down is when playback problems are reported, so record
                 // the transition — it's what correlates a stop with the app backgrounding.

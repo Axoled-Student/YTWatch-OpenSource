@@ -38,6 +38,16 @@ enum RepeatMode: String {
     }
 }
 
+/// Where audio plays. Headphones uses watchOS long-form audio (Bluetooth only, runs in the
+/// background natively). Speaker uses the default policy, which routes to the built-in
+/// speaker, and relies on SpeakerRuntime to keep the app alive with the screen off.
+enum AudioOutputMode: String {
+    case headphones, speaker
+
+    var label: String { self == .speaker ? "Watch Speaker" : "Headphones" }
+    var sfSymbol: String { self == .speaker ? "speaker.wave.2.fill" : "headphones" }
+}
+
 struct RecentPlay: Codable, Identifiable {
     var id: String { trackVideoId }
     let trackVideoId: String
@@ -70,7 +80,11 @@ final class WatchPlayer: ObservableObject {
 
     @Published var currentTrack: Track?
     @Published var currentPlaylist: Playlist?
-    @Published var isPlaying = false
+    @Published var isPlaying = false {
+        didSet { if isPlaying != oldValue { updateSpeakerRuntime() } }
+    }
+    @Published private(set) var outputMode: AudioOutputMode =
+        AudioOutputMode(rawValue: UserDefaults.standard.string(forKey: "audioOutputMode") ?? "") ?? .headphones
     @Published var currentTime: Double = 0
     @Published var duration: Double = 0
     @Published var error: String?
@@ -142,17 +156,79 @@ final class WatchPlayer: ObservableObject {
     // MARK: - Session setup
 
     func configureAudioSession() {
-        do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .default, policy: .longFormAudio)
-        } catch {
-            self.error = "Audio session: \(error.localizedDescription)"
-        }
+        applySessionCategory()
         setupRemoteControls()
         setupInterruptionHandling()
         setupRouteChangeHandling()
         loadRecentlyPlayed()
         restoreLastPlayed()
+    }
+
+    private func applySessionCategory() {
+        do {
+            let session = AVAudioSession.sharedInstance()
+            // .longFormAudio forces a Bluetooth route; .default plays on the built-in speaker.
+            let policy: AVAudioSession.RouteSharingPolicy = outputMode == .speaker ? .default : .longFormAudio
+            try session.setCategory(.playback, mode: .default, policy: policy)
+        } catch {
+            self.error = "Audio session: \(error.localizedDescription)"
+        }
+    }
+
+    /// Switch between headphones and the built-in speaker, keeping the current track.
+    func setOutputMode(_ mode: AudioOutputMode) {
+        guard mode != outputMode else { return }
+        WatchDiagnostics.shared.log("output mode -> \(mode.rawValue)")
+        let wasPlaying = isPlaying
+        if wasPlaying { pause() }
+        outputMode = mode
+        UserDefaults.standard.set(mode.rawValue, forKey: "audioOutputMode")
+        cancelActivationTimeout()
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        sessionActivated = false
+        applySessionCategory()
+        haptic(.click)
+        if mode == .headphones { SpeakerRuntime.shared.stop() }
+        if wasPlaying { play() }
+    }
+
+    private func updateSpeakerRuntime() {
+        guard outputMode == .speaker else {
+            SpeakerRuntime.shared.stop()
+            return
+        }
+        if isPlaying {
+            SpeakerRuntime.shared.ensureRunning()
+        } else {
+            SpeakerRuntime.shared.scheduleStopAfterPause()
+        }
+    }
+
+    /// Called when the app comes back on screen: renews an expired speaker session.
+    func appBecameActive() {
+        if outputMode == .speaker && isPlaying {
+            SpeakerRuntime.shared.ensureRunning()
+        }
+    }
+
+    /// Long-form sessions must use the async activate(options:); default-policy sessions
+    /// (speaker) use plain setActive. Completion always runs on the main actor.
+    private func activateAudioSession(_ completion: @escaping @MainActor @Sendable (Bool, Error?) -> Void) {
+        let session = AVAudioSession.sharedInstance()
+        if outputMode == .speaker {
+            do {
+                try session.setActive(true)
+                completion(true, nil)
+            } catch {
+                completion(false, error)
+            }
+            return
+        }
+        // This legacy API calls back off the main actor. Without @Sendable, Swift 6
+        // inherits this method's actor and traps before the Task can dispatch to it.
+        session.activate(options: []) { @Sendable success, activationError in
+            Task { @MainActor in completion(success, activationError) }
+        }
     }
 
     private var activationRetryCount = 0
@@ -170,43 +246,40 @@ final class WatchPlayer: ObservableObject {
         // watching: playback would die silently showing the new track's title. Time it out.
         startActivationTimeout(generation: generation)
         WatchDiagnostics.shared.log("  activating audio session")
-        let session = AVAudioSession.sharedInstance()
-        // This legacy API calls back off the main actor. Without @Sendable, Swift 6
-        // inherits this method's actor and traps before the Task can dispatch to it.
-        session.activate(options: []) { @Sendable [weak self] success, activationError in
-            Task { @MainActor in
-                guard let self, self.playbackGeneration == generation else { return }
-                guard success else {
-                    if self.activationRetryCount < Self.maxActivationRetries {
-                        self.activationRetryCount += 1
-                        let delay = UInt64(self.activationRetryCount) * 500_000_000
-                        print("[Player] Activation retry \(self.activationRetryCount)/\(Self.maxActivationRetries)")
+        activateAudioSession { [weak self] success, activationError in
+            guard let self, self.playbackGeneration == generation else { return }
+            guard success else {
+                if self.activationRetryCount < Self.maxActivationRetries {
+                    self.activationRetryCount += 1
+                    let delay = UInt64(self.activationRetryCount) * 500_000_000
+                    print("[Player] Activation retry \(self.activationRetryCount)/\(Self.maxActivationRetries)")
+                    Task { @MainActor [weak self] in
                         try? await Task.sleep(nanoseconds: delay)
-                        guard self.playbackGeneration == generation else { return }
+                        guard let self, self.playbackGeneration == generation else { return }
                         self.activateSessionAndPlay(url: url, generation: generation)
-                    } else {
-                        self.activationRetryCount = 0
-                        self.cancelActivationTimeout()
-                        WatchDiagnostics.shared.log("audio session activation failed: \(activationError?.localizedDescription ?? "unknown")")
-                        self.error = "Audio activation failed: \(activationError?.localizedDescription ?? "unknown")"
-                        // playTrack no longer empties the player up front (so track handoffs
-                        // stay gapless), so the previous item may still be loaded here. Clear
-                        // it, or "play" would resume the old song under the new one's title.
-                        self.tearDownPlayer()
-                        self.isPlaying = false
                     }
-                    return
-                }
-                self.activationRetryCount = 0
-                self.sessionActivated = true
-                WatchDiagnostics.shared.log("  audio session active")
-                if let item = self.playerItem, self.player?.currentItem === item {
-                    self.cancelActivationTimeout()
-                    if self.isPlaying { self.player?.play() }
-                    self.updateNowPlaying()
                 } else {
-                    self.beginPlayback(url: url, generation: generation)
+                    self.activationRetryCount = 0
+                    self.cancelActivationTimeout()
+                    WatchDiagnostics.shared.log("audio session activation failed: \(activationError?.localizedDescription ?? "unknown")")
+                    self.error = "Audio activation failed: \(activationError?.localizedDescription ?? "unknown")"
+                    // playTrack no longer empties the player up front (so track handoffs
+                    // stay gapless), so the previous item may still be loaded here. Clear
+                    // it, or "play" would resume the old song under the new one's title.
+                    self.tearDownPlayer()
+                    self.isPlaying = false
                 }
+                return
+            }
+            self.activationRetryCount = 0
+            self.sessionActivated = true
+            WatchDiagnostics.shared.log("  audio session active")
+            if let item = self.playerItem, self.player?.currentItem === item {
+                self.cancelActivationTimeout()
+                if self.isPlaying { self.player?.play() }
+                self.updateNowPlaying()
+            } else {
+                self.beginPlayback(url: url, generation: generation)
             }
         }
     }
@@ -230,7 +303,9 @@ final class WatchPlayer: ObservableObject {
             }
             WatchDiagnostics.shared.log("audio session activation timed out")
             self.activationRetryCount = 0
-            self.error = "Connect your headphones and tap Play."
+            self.error = self.outputMode == .speaker
+                ? "Speaker didn't start. Tap Play to retry."
+                : "Connect your headphones and tap Play."
             self.stopPlayback()
         }
     }
@@ -1166,14 +1241,11 @@ final class WatchPlayer: ObservableObject {
                     let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
                     if options.contains(.shouldResume) && self.wasPlayingBeforeInterruption {
                         let gen = self.playbackGeneration
-                        AVAudioSession.sharedInstance().activate(options: []) { @Sendable [weak self] success, _ in
-                            guard success else { return }
-                            Task { @MainActor in
-                                guard let self, self.playbackGeneration == gen,
-                                      self.wasPlayingBeforeInterruption else { return }
-                                self.sessionActivated = true
-                                self.play()
-                            }
+                        self.activateAudioSession { [weak self] success, _ in
+                            guard success, let self, self.playbackGeneration == gen,
+                                  self.wasPlayingBeforeInterruption else { return }
+                            self.sessionActivated = true
+                            self.play()
                         }
                     }
                 }
@@ -1201,7 +1273,7 @@ final class WatchPlayer: ObservableObject {
 
         Task { @MainActor in
             switch reason {
-            case .oldDeviceUnavailable:
+            case .oldDeviceUnavailable where self.outputMode == .headphones:
                 // Headphones gone — pause so nothing is lost, but remember it was the route,
                 // not the user. On a Watch long-form audio only plays over Bluetooth, and
                 // headphones drop out routinely mid-run; previously that stopped playback
@@ -1212,19 +1284,17 @@ final class WatchPlayer: ObservableObject {
                     || (self.lastAudibleAt.map { Date().timeIntervalSince($0) < 3 } ?? false)
                 self.pause() // clears any older route-loss marker
                 if wasPlaying { self.routeLossPauseDate = Date() }
-            case .newDeviceAvailable:
+            case .newDeviceAvailable where self.outputMode == .headphones:
                 guard let lost = self.routeLossPauseDate,
                       Date().timeIntervalSince(lost) < Self.routeResumeWindow else { return }
                 WatchDiagnostics.shared.log("audio route back — resuming")
                 // Re-activate first: the session may have been torn down with the route.
                 let gen = self.playbackGeneration
-                AVAudioSession.sharedInstance().activate(options: []) { @Sendable [weak self] success, _ in
-                    Task { @MainActor in
-                        guard let self, success, self.playbackGeneration == gen,
-                              self.routeLossPauseDate == lost else { return }
-                        self.sessionActivated = true
-                        self.play()
-                    }
+                self.activateAudioSession { [weak self] success, _ in
+                    guard let self, success, self.playbackGeneration == gen,
+                          self.routeLossPauseDate == lost else { return }
+                    self.sessionActivated = true
+                    self.play()
                 }
             default:
                 break
