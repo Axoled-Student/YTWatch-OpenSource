@@ -38,9 +38,9 @@ private struct NowPlayingMainPage: View {
     @Binding var darkScreen: Bool
 
     var body: some View {
-        ZStack {
-            ArtworkBackdrop(videoId: player.currentTrack?.videoId)
-
+        // The backdrop goes in .background so its ignoresSafeArea() can't widen the
+        // controls past the rounded screen edges (it did when it was a ZStack sibling).
+        Group {
             VStack(spacing: 6) {
                 HStack(spacing: 8) {
                     ArtworkThumb(videoId: player.currentTrack?.videoId, size: 40)
@@ -108,7 +108,13 @@ private struct NowPlayingMainPage: View {
                         .multilineTextAlignment(.center)
                 }
             }
-            .padding(.horizontal, 6)
+            .padding(.leading, 6)
+            // Room for the vertical page indicator on the trailing edge.
+            .padding(.trailing, 12)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            ArtworkBackdrop(videoId: player.currentTrack?.videoId)
         }
     }
 }
@@ -206,7 +212,8 @@ private struct NowPlayingOptionsPage: View {
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, 6)
+            .padding(.leading, 6)
+            .padding(.trailing, 12) // clear of the page indicator
         }
     }
 

@@ -90,7 +90,10 @@ final class WatchPlayer: ObservableObject {
     @Published var error: String?
     @Published var isShuffled = false
     @Published var repeatMode: RepeatMode = .none
-    @Published var currentVolume: Float = 0.5
+    /// The player's own gain, on top of the system volume. Full by default: the system
+    /// volume (Digital Crown / volume HUD) is what the wearer adjusts, and anything lower
+    /// here just caps it — 0.5 made the Watch speaker too quiet even at 100%.
+    @Published var currentVolume: Float = 1.0
     /// When a playlist ends, keep playing an endless shuffle of the whole library
     /// instead of stopping.
     @Published var autoPlaySimilar: Bool = (UserDefaults.standard.object(forKey: "autoPlaySimilar") as? Bool) ?? true {
