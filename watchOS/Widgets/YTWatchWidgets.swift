@@ -51,11 +51,15 @@ struct NowPlayingEntry: TimelineEntry {
                         relevance: TimelineEntryRelevance(score: 5))
     }
 
-    static let sample = NowPlayingEntry(
-        date: .now, state: .playing,
-        item: .init(videoId: "", title: "Song Title", artist: "Artist", duration: 200),
-        trackStart: .now.addingTimeInterval(-70), pausedElapsed: 0, outputMode: "speaker",
-        relevance: nil)
+    // Computed: TimelineEntryRelevance isn't Sendable, so a stored static would trip
+    // Swift 6's global-state check.
+    static var sample: NowPlayingEntry {
+        NowPlayingEntry(
+            date: .now, state: .playing,
+            item: .init(videoId: "", title: "Song Title", artist: "Artist", duration: 200),
+            trackStart: .now.addingTimeInterval(-70), pausedElapsed: 0, outputMode: "speaker",
+            relevance: nil)
+    }
 }
 
 struct NowPlayingProvider: TimelineProvider {
