@@ -8,6 +8,7 @@ struct PlaylistListView: View {
     @State private var searchText = ""
     @State private var showSearch = false
     @State private var diagnosticsMessage: String?
+    @State private var openNowPlaying = false
 
     private var filteredPlaylists: [Playlist] {
         let all = receiver.availablePlaylists
@@ -100,18 +101,9 @@ struct PlaylistListView: View {
                 } else {
                     ScrollView {
                         LazyVStack(spacing: 6) {
-                            // Resume indicator
-                            if !player.isPlaying, player.currentTrack != nil, player.currentTime > 5 {
-                                ResumeIndicator()
-                            }
-
-                            // Now playing bar
-                            if let track = player.currentTrack,
-                               player.isPlaying || player.currentTime <= 5 {
-                                NavigationLink(destination: NowPlayingScreen()) {
-                                    NowPlayingBanner(track: track)
-                                }
-                                .buttonStyle(.plain)
+                            // Current track: progress, play/pause, tap for Now Playing
+                            if let track = player.currentTrack {
+                                NowPlayingCard(track: track)
                             }
 
                             // Search bar
@@ -356,6 +348,15 @@ struct PlaylistListView: View {
                 }
             }
             .navigationTitle("YTWatch")
+            // The widget opens ytwatch://nowplaying.
+            .navigationDestination(isPresented: $openNowPlaying) {
+                NowPlayingScreen()
+            }
+            .onOpenURL { url in
+                guard url.scheme == "ytwatch", url.host == "nowplaying",
+                      player.currentTrack != nil else { return }
+                openNowPlaying = true
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     if isRefreshing {
@@ -404,44 +405,90 @@ struct PlaylistListView: View {
     }
 }
 
-// MARK: - Resume Indicator
+// MARK: - Now Playing Card
 
-private struct ResumeIndicator: View {
+private struct NowPlayingCard: View {
+    let track: Track
     @ObservedObject private var player = WatchPlayer.shared
 
+    private var fraction: Double {
+        let d = player.duration, t = player.currentTime
+        guard d.isFinite, t.isFinite, d > 0 else { return 0 }
+        return min(1, max(0, t / d))
+    }
+
     var body: some View {
-        if let track = player.currentTrack {
-            Button {
-                player.play()
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "play.circle.fill")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(Color.ytRed)
-
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Continue")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(Color(white: 0.5))
-                        Text(track.title)
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
+        VStack(spacing: 7) {
+            HStack(spacing: 8) {
+                NavigationLink(destination: NowPlayingScreen()) {
+                    HStack(spacing: 8) {
+                        if let img = WatchThumbnailCache.shared.image(for: track.videoId) {
+                            Image(uiImage: img)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: 34, height: 34)
+                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        } else {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(Color(white: 0.15))
+                                .frame(width: 34, height: 34)
+                                .overlay(
+                                    Image(systemName: "music.note")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(Color(white: 0.4))
+                                )
+                        }
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(player.isPlaying ? "NOW PLAYING" : "PAUSED")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(Color.ytRed)
+                            Text(track.title)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                            Text(track.artist)
+                                .font(.system(size: 10))
+                                .foregroundStyle(Color(white: 0.5))
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
                     }
-
-                    Spacer()
+                    .contentShape(Rectangle())
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(Color(white: 0.06))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(Color.ytRed.opacity(0.15), lineWidth: 0.5)
-                )
+                .buttonStyle(.plain)
+
+                Button { player.togglePlayPause() } label: {
+                    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white)
+                        .offset(x: player.isPlaying ? 0 : 1)
+                        .frame(width: 32, height: 32)
+                        .background(Color.ytRed, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
             }
-            .buttonStyle(.plain)
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.15))
+                    Capsule().fill(Color.ytRed)
+                        .frame(width: geo.size.width * fraction)
+                }
+            }
+            .frame(height: 3)
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(
+            LinearGradient(colors: [Color.ytRed.opacity(0.22), Color(white: 0.07)],
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.ytRed.opacity(0.25), lineWidth: 0.5)
+        )
     }
 }
 
@@ -636,6 +683,8 @@ private struct SmartPlaylistRow: View {
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
                 Text("\(count) \(unit)")
                     .font(.system(size: 10))
                     .foregroundStyle(Color(white: 0.38))
@@ -651,62 +700,6 @@ private struct SmartPlaylistRow: View {
         .padding(.vertical, 10)
         .background(Color(white: 0.09))
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-}
-
-// MARK: - Now Playing Banner
-
-private struct NowPlayingBanner: View {
-    let track: Track
-    @ObservedObject private var player = WatchPlayer.shared
-
-    var body: some View {
-        HStack(spacing: 8) {
-            if let img = WatchThumbnailCache.shared.image(for: track.videoId) {
-                Image(uiImage: img)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 28, height: 28)
-                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-            } else {
-                Image(systemName: player.isPlaying ? "waveform" : "pause.fill")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(Color.ytRed)
-                    .symbolEffect(.variableColor.iterative, isActive: player.isPlaying)
-                    .frame(width: 28, height: 28)
-            }
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(track.title)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                Text(track.artist)
-                    .font(.system(size: 9))
-                    .foregroundStyle(Color(white: 0.45))
-                    .lineLimit(1)
-            }
-
-            Spacer()
-
-            Image(systemName: "chevron.right")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(Color(white: 0.25))
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(
-            LinearGradient(
-                colors: [Color.ytRed.opacity(0.15), Color(white: 0.07)],
-                startPoint: .leading,
-                endPoint: .trailing
-            )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.ytRed.opacity(0.25), lineWidth: 0.5)
-        )
     }
 }
 

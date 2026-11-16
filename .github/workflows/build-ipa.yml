@@ -53,6 +53,10 @@ jobs:
           if [ -z "$WATCH_APP" ]; then echo "::error::Watch app not embedded in YTWatch.app/Watch/"; exit 1; fi
           echo "Embedded watch app: $WATCH_APP"
           file "$WATCH_APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$WATCH_APP/Info.plist")"
+          # The Smart Stack widget ships inside the Watch app.
+          WIDGET=$(ls -d "$WATCH_APP/PlugIns/"*.appex 2>/dev/null | head -1)
+          if [ -z "$WIDGET" ]; then echo "::error::Widget extension not embedded in the Watch app"; exit 1; fi
+          echo "Embedded widget: $WIDGET ($(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$WIDGET/Info.plist"))"
           cd "$RUNNER_TEMP/ipa"
           zip -qry "$GITHUB_WORKSPACE/YTWatch-unsigned.ipa" Payload
           ls -lh "$GITHUB_WORKSPACE/YTWatch-unsigned.ipa"

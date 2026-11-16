@@ -20,6 +20,21 @@
     <true/>
     <key>WKCompanionAppBundleIdentifier</key>
     <string>com.andre.ytwatch.app</string>
+    <!-- Fallback App Group for Xcode builds; sideloaded builds derive it at runtime. -->
+    <key>YTAppGroupID</key>
+    <string>$(APP_GROUP_ID)</string>
+    <!-- ytwatch://nowplaying — tapping the widget opens Now Playing. -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>ytwatch</string>
+            </array>
+        </dict>
+    </array>
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
     <!-- Background audio mode for independent watch playback -->

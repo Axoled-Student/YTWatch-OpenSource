@@ -56,6 +56,8 @@ struct YTWatchWatchApp: App {
                 // the transition — it's what correlates a stop with the app backgrounding.
                 WatchDiagnostics.shared.log("app backgrounded (playing: \(WatchPlayer.shared.isPlaying))")
                 WatchDiagnostics.shared.flush()
+                // Hand the widget the latest state before watchOS may suspend us.
+                WidgetPublisher.shared.publishNow()
                 // Persist any deferred playlist changes before we can be suspended —
                 // audio files are written immediately, but their metadata is debounced,
                 // so without this a sync that finishes just before backgrounding leaves

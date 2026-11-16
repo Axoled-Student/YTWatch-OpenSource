@@ -193,6 +193,7 @@ final class WatchPlayer: ObservableObject {
         haptic(.click)
         if mode == .headphones { SpeakerRuntime.shared.stop() }
         if wasPlaying { play() }
+        WidgetPublisher.shared.schedule()
     }
 
     private func updateSpeakerRuntime() {
@@ -394,6 +395,7 @@ final class WatchPlayer: ObservableObject {
         queue.remove(trackIndex: trackIdx)
         queueRevision += 1
         haptic(.click)
+        WidgetPublisher.shared.schedule()
     }
 
     /// Move a queued track to play immediately after the current one.
@@ -403,6 +405,7 @@ final class WatchPlayer: ObservableObject {
         queue.moveToNext(trackIndex: trackIdx)
         queueRevision += 1
         haptic(.click)
+        WidgetPublisher.shared.schedule()
     }
 
     func play() {
@@ -493,11 +496,13 @@ final class WatchPlayer: ObservableObject {
         // Rebuild around the current track — buildQueue filters to available tracks
         // and keeps the current song at the front, so shuffle never gets "stuck".
         buildQueue(startingAt: currentIndex)
+        WidgetPublisher.shared.schedule()
     }
 
     func toggleRepeat() {
         repeatMode = repeatMode.next
         haptic(.click)
+        WidgetPublisher.shared.schedule()
     }
 
     // MARK: - Up Next
@@ -1151,6 +1156,7 @@ final class WatchPlayer: ObservableObject {
         }
         center.nowPlayingInfo = info
         center.playbackState = isPlaying ? .playing : .paused
+        WidgetPublisher.shared.schedule()
     }
 
     private func artworkForCurrentTrack(_ track: Track) -> MPMediaItemArtwork? {
@@ -1339,5 +1345,7 @@ final class WatchPlayer: ObservableObject {
         knownTrackDuration = track.durationSeconds > 0 ? Double(track.durationSeconds) : 0
         duration = knownTrackDuration
         currentTime = savedTime
+        // Show the restored (paused) track on the widget until something plays.
+        WidgetPublisher.shared.schedule()
     }
 }

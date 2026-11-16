@@ -49,7 +49,7 @@ private struct NowPlayingMainPage: View {
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(.white)
                             .lineLimit(2)
-                            .minimumScaleFactor(0.85)
+                            .fixedSize(horizontal: false, vertical: true)
                         if let artist = player.currentTrack?.artist {
                             Text(artist)
                                 .font(.system(size: 11))
@@ -87,6 +87,10 @@ private struct NowPlayingMainPage: View {
                 HStack(spacing: 6) {
                     OutputChip()
                     Spacer(minLength: 0)
+                    // Tap, then turn the Digital Crown.
+                    SystemVolumeControl()
+                        .frame(width: 30, height: 30)
+                        .accessibilityLabel("Volume")
                     Button {
                         withAnimation(.easeOut(duration: 0.2)) { darkScreen = true }
                     } label: {
@@ -173,6 +177,8 @@ private struct NowPlayingOptionsPage: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
+                // The back button floats over the top of this page.
+                Color.clear.frame(height: 22)
                 OptionLabel("Output")
                 HStack(spacing: 6) {
                     OutputOption(mode: .headphones)
@@ -187,8 +193,22 @@ private struct NowPlayingOptionsPage: View {
                 }
 
                 OptionLabel("Volume")
-                SystemVolumeControl()
-                    .frame(height: 34)
+                HStack(spacing: 10) {
+                    SystemVolumeControl()
+                        .frame(width: 38, height: 38)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(player.outputMode == .speaker ? "Watch speaker" : "Headphones")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.white)
+                        Text("Tap, then turn the Digital Crown")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color(white: 0.5))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(8)
+                .background(Color(white: 0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
                 OptionLabel("Playback")
                 HStack(spacing: 6) {
@@ -196,7 +216,7 @@ private struct NowPlayingOptionsPage: View {
                         player.toggleShuffle()
                     }
                     ToggleTile(symbol: player.repeatMode.sfSymbol,
-                               title: player.repeatMode == .one ? "Repeat 1" : "Repeat",
+                               title: player.repeatMode == .one ? "Repeat One" : "Repeat",
                                isOn: player.repeatMode != .none) {
                         player.toggleRepeat()
                     }
@@ -284,10 +304,10 @@ private struct ToggleTile: View {
                 Text(title)
                     .font(.system(size: 10, weight: .semibold))
             }
-            .foregroundStyle(isOn ? Color.ytRed : Color(white: 0.55))
+            .foregroundStyle(isOn ? .white : Color(white: 0.55))
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
-            .background(isOn ? Color.ytRed.opacity(0.18) : Color(white: 0.12),
+            .background(isOn ? Color.ytRed : Color(white: 0.12),
                         in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .buttonStyle(.plain)
