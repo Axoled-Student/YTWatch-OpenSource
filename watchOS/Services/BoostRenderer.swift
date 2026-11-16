@@ -16,7 +16,7 @@ import Foundation
 import AVFoundation
 
 enum VolumeBoost: Int, CaseIterable, Identifiable {
-    case off = 0, low = 3, medium = 6, high = 9
+    case off = 0, low = 3, medium = 6, high = 9, max = 12
 
     var id: Int { rawValue }
     var label: String { self == .off ? "Off" : "+\(rawValue) dB" }
@@ -40,8 +40,10 @@ final class BoostRenderer {
         return dir
     }
 
+    /// "s2": speaker-tuned renders (high-pass + presence). Bump when the processing
+    /// changes so old cached copies aren't reused.
     private static func key(_ videoId: String, _ boost: VolumeBoost) -> String {
-        "\(videoId)_\(boost.rawValue)"
+        "\(videoId)_\(boost.rawValue)s2"
     }
 
     private static func fileURL(_ videoId: String, _ boost: VolumeBoost) -> URL {
@@ -152,6 +154,13 @@ final class BoostRenderer {
               let outBuf = AVAudioPCMBuffer(pcmFormat: monoFormat, frameCapacity: chunk),
               let dst = outBuf.floatChannelData?[0] else { return false }
 
+        // Speaker tuning before the gain: the Watch speaker can't reproduce bass, but bass
+        // carries most of a song's peak energy, so it makes the limiter turn everything
+        // down. Cutting it (and lifting the 2–4 kHz range the ear is most sensitive to)
+        // leaves the limiter far more room — louder and cleaner on this speaker.
+        var highPass = Biquad.highPass(frequency: 320, q: 0.707, sampleRate: sampleRate)
+        var highPass2 = Biquad.highPass(frequency: 320, q: 0.707, sampleRate: sampleRate)
+        var presence = Biquad.peaking(frequency: 3000, q: 0.9, gainDB: 4, sampleRate: sampleRate)
         var limiter = LookaheadLimiter(sampleRate: sampleRate, gain: gain)
         // The limiter delays audio by its look-ahead; drop that many leading samples and
         // flush the same number at the end, so the copy lines up with the original exactly.
@@ -167,7 +176,8 @@ final class BoostRenderer {
             for i in 0..<n {
                 var s: Float = 0
                 for c in 0..<channels { s += src[c][i] }
-                let y = limiter.process(s * scale)
+                let tuned = presence.process(highPass2.process(highPass.process(s * scale)))
+                let y = limiter.process(tuned)
                 if toSkip > 0 { toSkip -= 1; continue }
                 dst[w] = y
                 w += 1
@@ -186,6 +196,38 @@ final class BoostRenderer {
             remaining -= n
         }
         return true
+    }
+}
+
+/// RBJ-cookbook biquad filter (direct form I).
+struct Biquad {
+    private let b0, b1, b2, a1, a2: Float
+    private var x1: Float = 0, x2: Float = 0, y1: Float = 0, y2: Float = 0
+
+    private init(b0: Double, b1: Double, b2: Double, a0: Double, a1: Double, a2: Double) {
+        self.b0 = Float(b0 / a0); self.b1 = Float(b1 / a0); self.b2 = Float(b2 / a0)
+        self.a1 = Float(a1 / a0); self.a2 = Float(a2 / a0)
+    }
+
+    static func highPass(frequency: Double, q: Double, sampleRate: Double) -> Biquad {
+        let w0 = 2 * Double.pi * frequency / sampleRate
+        let alpha = sin(w0) / (2 * q), c = cos(w0)
+        return Biquad(b0: (1 + c) / 2, b1: -(1 + c), b2: (1 + c) / 2,
+                      a0: 1 + alpha, a1: -2 * c, a2: 1 - alpha)
+    }
+
+    static func peaking(frequency: Double, q: Double, gainDB: Double, sampleRate: Double) -> Biquad {
+        let a = pow(10, gainDB / 40)
+        let w0 = 2 * Double.pi * frequency / sampleRate
+        let alpha = sin(w0) / (2 * q), c = cos(w0)
+        return Biquad(b0: 1 + alpha * a, b1: -2 * c, b2: 1 - alpha * a,
+                      a0: 1 + alpha / a, a1: -2 * c, a2: 1 - alpha / a)
+    }
+
+    mutating func process(_ x: Float) -> Float {
+        let y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+        x2 = x1; x1 = x; y2 = y1; y1 = y
+        return y
     }
 }
 

@@ -22,8 +22,8 @@ settings:
     # Keep these in step with what's uploaded: the archive passes
     # CURRENT_PROJECT_VERSION on the command line, and App Store Connect rejects any
     # build number it has already seen, so bump this here whenever a build ships.
-    MARKETING_VERSION: "1.6.0"
-    CURRENT_PROJECT_VERSION: "76"
+    MARKETING_VERSION: "1.6.1"
+    CURRENT_PROJECT_VERSION: "77"
     # Shared by the Watch app and its widget. Change it with the bundle IDs if you sign
     # with your own team (group IDs are global). Sideloaded builds ignore it.
     APP_GROUP_ID: group.com.andre.ytwatch.app
